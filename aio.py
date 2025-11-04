@@ -24,7 +24,7 @@ user_states = {}
 
 # Fetch users from the API
 async def fetch_users(session, token, batch_size=50):
-    url = "https://api.meeff.com/user/explore/v2/?lat=33.589510&lng=-117.860909"
+    url = "https://api.meeff.com/user/explore/v2/?lat=29.6163714&lng=71.984266"
     headers = {"meeff-access-token": token, "Connection": "keep-alive"}
     users = []
     async with session.get(url, headers=headers) as response:
