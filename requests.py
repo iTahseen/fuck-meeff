@@ -84,7 +84,7 @@ def format_user(user):
     )
 
 async def fetch_users(session, token):
-    url = "https://api.meeff.com/user/explore/v2/?lat=29.6163714&lng=71.984266"
+    url = "https://api.meeff.com/user/explore/v2?lng=71.9841307&unreachableUserIds=68f73fc6828ded00010174fc&lat=29.6164214&locale=en"
     headers = {"meeff-access-token": token, "Connection": "keep-alive"}
     async with session.get(url, headers=headers) as response:
         return (await response.json()).get("users", [])
