@@ -122,6 +122,7 @@ async def signup_callback_handler(callback: CallbackQuery):
     state = user_signup_states.get(user_id, {"stage": "menu"})
     if callback.data == "signup_go":
         state["stage"] = "ask_email"
+        state["device_info"] = random_device_info()
         user_signup_states[user_id] = state
         await callback.message.edit_text("Enter your email for registration:", reply_markup=BACK_TO_SIGNUP)
         await callback.answer()
@@ -133,6 +134,7 @@ async def signup_callback_handler(callback: CallbackQuery):
         return True
     if callback.data == "signin_go":
         state["stage"] = "signin_email"
+        state["device_info"] = random_device_info()
         user_signup_states[user_id] = state
         await callback.message.edit_text("Enter your email to sign in:", reply_markup=BACK_TO_SIGNUP)
         await callback.answer()
@@ -145,9 +147,16 @@ async def signup_callback_handler(callback: CallbackQuery):
             await callback.message.edit_text("Choose an option:", reply_markup=SIGNUP_MENU)
             return True
         await callback.message.edit_text("Checking verification and logging in...", reply_markup=None)
-        login_result = await try_signin(creds['email'], creds['password'])
+        login_result = await try_signin(creds['email'], creds['password'], state.get("device_info"))
         if login_result.get("accessToken"):
             await store_token_and_show_card(callback.message, login_result, creds)
+        elif login_result.get("errorCode") == "SecuredPendingDevice":
+            await callback.message.edit_text(
+                "🔐 Device verification required!\n\n"
+                "Check your mobile device for a verification notification and verify it there.\n\n"
+                "Once verified on your mobile, click 'Verify' again to complete login.",
+                reply_markup=VERIFY_BUTTON
+            )
         elif login_result.get("errorCode") in ("NotVerified", "EmailVerificationRequired"):
             await callback.message.edit_text(
                 "Email not verified! Please check your inbox and click the link, then try Verify again.\n"
@@ -162,7 +171,7 @@ async def signup_callback_handler(callback: CallbackQuery):
         if not creds or not creds.get("email") or not creds.get("password"):
             await callback.answer("No signup info. Please sign up again.", show_alert=True)
             return True
-        login_result = await try_signin(creds['email'], creds['password'])
+        login_result = await try_signin(creds['email'], creds['password'], state.get("device_info"))
         access_token = login_result.get("accessToken")
         if not access_token:
             await callback.answer("Token not available. Try signing up again.", show_alert=True)
@@ -305,7 +314,7 @@ async def signup_message_handler(message: Message):
         email = state["signin_email"]
         password = message.text.strip()
         processing_msg = await message.answer("Signing in, please wait...", reply_markup=None)
-        login_result = await try_signin(email, password)
+        login_result = await try_signin(email, password, state.get("device_info"))
         if login_result.get("accessToken"):
             state["creds"] = {"email": email, "password": password}
             creds = state["creds"]
@@ -371,7 +380,7 @@ async def meeff_upload_image(img_bytes):
         return None
 
 async def try_signup(state):
-    device_info = random_device_info()
+    device_info = state.get("device_info", {})
     if state.get("photos"):
         photos_str = "|".join(state["photos"])
     else:
@@ -407,8 +416,9 @@ async def try_signup(state):
         async with session.post(url, json=payload, headers=headers) as resp:
             return await resp.json()
 
-async def try_signin(email, password):
-    device_info = random_device_info()
+async def try_signin(email, password, device_info=None):
+    if device_info is None:
+        device_info = random_device_info()
     url = "https://api.meeff.com/user/login/v4"
     payload = {
         "provider": "email",
@@ -418,14 +428,38 @@ async def try_signin(email, password):
         "locale": "en"
     }
     headers = {
-        'User-Agent': "okhttp/5.0.0-alpha.14",
+        'User-Agent': "okhttp/5.1.0",
         'Accept-Encoding': "gzip",
         'Content-Type': "application/json",
         'content-type': "application/json; charset=utf-8"
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, headers=headers) as resp:
-            return await resp.json()
+            result = await resp.json()
+            if result.get("errorCode") == "SecuredPendingDevice":
+                pending_device_id = result.get("pendingDeviceId")
+                if pending_device_id:
+                    await verify_pending_device(result.get("accessToken"), pending_device_id)
+            return result
+
+async def verify_pending_device(access_token, pending_device_id):
+    """Verify a pending device when SecuredPendingDevice error occurs."""
+    url = f"https://api.meeff.com/user/pendingdevice/{pending_device_id}/verify/v1"
+    payload = {"locale": "en"}
+    headers = {
+        'User-Agent': "okhttp/5.1.0",
+        'Accept-Encoding': "gzip",
+        'Content-Type': "application/json",
+        'meeff-access-token': access_token,
+        'content-type': "application/json; charset=utf-8"
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                return await resp.json()
+    except Exception as ex:
+        print(f"Pending device verification failed: {ex}")
+        return {"errorCode": "unknown", "errorMessage": "Verification request failed."}
 
 async def resend_verification_email(access_token):
     url = "https://api.meeff.com/user/resendEmailVerification/v1"
@@ -453,7 +487,6 @@ async def store_token_and_show_card(msg_obj, login_result, creds):
         tokens = get_tokens(user_id)
         account_name = user_data.get("name") if user_data else creds.get("email")
         set_token(user_id, access_token, account_name, email)
-        # --- Set default filter for new accounts ---
         if not get_user_filters(user_id, access_token):
             set_user_filters(user_id, access_token, DEFAULT_FILTER)
         if user_data:
@@ -464,7 +497,6 @@ async def store_token_and_show_card(msg_obj, login_result, creds):
             set_info_card(user_id, access_token, text, email)
             await msg_obj.edit_text("Account signed in and saved!\n" + text, parse_mode="HTML")
         else:
-            # Show resend button if not verified (no user info)
             await msg_obj.edit_text(
                 "Account signed in, but no profile info found. Please verify your email and try again.",
                 reply_markup=RESEND_EMAIL_BUTTON
