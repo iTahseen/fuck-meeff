@@ -4,7 +4,7 @@ import random
 import asyncio
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from db import set_token, set_info_card, set_user_filters
-from signup import format_user_with_nationality, DEFAULT_FILTER, try_signup, try_signin, resend_verification_email, meeff_upload_image
+from signup import format_user_with_nationality, DEFAULT_FILTER, try_signup, try_signin, resend_verification_email, meeff_upload_image, random_device_info
 
 SPAMMER_MENU = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Back", callback_data="spammer_menu")]
@@ -162,6 +162,7 @@ async def spammer_message_handler(message: Message):
             await message.answer("Enter M or F for gender:", reply_markup=SPAMMER_MENU)
             return True
         state["gender"] = gender
+        state["device_info"] = random_device_info()
         # NEW: Ask for signup country before description/photos
         state["stage"] = "ask_signup_country"
         await message.answer("Enter the country code for SIGNUP (nationality, e.g. US, UK, RU):", reply_markup=SPAMMER_MENU)
@@ -267,6 +268,7 @@ async def spammer_message_handler(message: Message):
                     "photos": state["photos"],
                     "filters": filter_obj.copy(),
                     "signup_country": state.get("signup_country", "US"),
+                    "device_info": state.get("device_info")
                 }
                 signup_result = await try_signup(user_state)
                 if signup_result.get("user", {}).get("_id"):
@@ -327,7 +329,7 @@ async def spammer_callback_handler(callback: CallbackQuery):
         email_to_account = {acc["email"]: acc for acc in state.get("accounts", []) if not acc.get("signup_failed")}
         for email in to_check:
             account = email_to_account[email]
-            login_result = await try_signin(account["email"], account["password"])
+            login_result = await try_signin(account["email"], account["password"], account.get("device_info"))
             error_code = login_result.get("errorCode")
             access_token = login_result.get("accessToken")
             error_msg = login_result.get("errorMessage") or login_result.get("message") or "login failed"
@@ -379,7 +381,7 @@ async def spammer_callback_handler(callback: CallbackQuery):
         email_to_account = {acc["email"]: acc for acc in state.get("accounts", []) if not acc.get("signup_failed")}
         for email in not_verified:
             account = email_to_account[email]
-            login_result = await try_signin(account["email"], account["password"])
+            login_result = await try_signin(account["email"], account["password"], account.get("device_info"))
             access_token = login_result.get("accessToken")
             if access_token:
                 resend_result = await resend_verification_email(access_token)
