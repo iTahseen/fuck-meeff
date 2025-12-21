@@ -41,15 +41,6 @@ API_TOKEN = os.getenv("API_TOKEN")
 TEMP_PASSWORD = os.getenv("TEMP_PASSWORD")
 ADMIN_USER_IDS = list(map(int, os.getenv("ADMIN_USER_IDS", "").split(",")))
 
-if not API_TOKEN:
-    raise ValueError("API_TOKEN is not set")
-
-if not TEMP_PASSWORD:
-    raise ValueError("TEMP_PASSWORD is not set")
-
-if not ADMIN_USER_IDS or ADMIN_USER_IDS == ['']:
-    raise ValueError("ADMIN_USER_IDS is not set")
-
 password_access = {}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
