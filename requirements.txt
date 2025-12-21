@@ -4,3 +4,4 @@ requests
 pymongo
 python-dateutil
 psutil
+python-dotenv
