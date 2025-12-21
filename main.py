@@ -1,12 +1,14 @@
 import asyncio
 import aiohttp
 import logging
+import os
 from datetime import datetime, timedelta
 from collections import defaultdict
 from aiogram import Bot, Dispatcher, Router, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from aiogram.filters import Command
 from aiogram.types.callback_query import CallbackQuery
+from dotenv import load_dotenv
 
 from db import (
     set_token, get_tokens, set_current_account, get_current_account,
@@ -33,9 +35,21 @@ from blocklist import (
 from signup import signup_command, signup_callback_handler, signup_message_handler
 from spammer import spammer_command, spammer_message_handler, spammer_callback_handler
 
-API_TOKEN = "7735279075:AAH_GbPyx4oSh1_1Qn3GYvxNNRr2DEydBgI"
-ADMIN_USER_IDS = [6387028671, 7725409374, 6816341239, 6204011131]
-TEMP_PASSWORD = "11223344"
+load_dotenv()
+
+API_TOKEN = os.getenv("API_TOKEN")
+TEMP_PASSWORD = os.getenv("TEMP_PASSWORD")
+ADMIN_USER_IDS = list(map(int, os.getenv("ADMIN_USER_IDS", "").split(",")))
+
+if not API_TOKEN:
+    raise ValueError("API_TOKEN is not set")
+
+if not TEMP_PASSWORD:
+    raise ValueError("TEMP_PASSWORD is not set")
+
+if not ADMIN_USER_IDS or ADMIN_USER_IDS == ['']:
+    raise ValueError("ADMIN_USER_IDS is not set")
+
 password_access = {}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -237,7 +251,7 @@ async def blockadd_command(message: types.Message):
         return
     add_to_permanent_blocklist(user_id, block_id)
     await message.reply(f"User ID {block_id} has been permanently blocked.")
-    
+
 @router.message(Command("aio"))
 async def aio_command(message: types.Message):
     if not has_valid_access(message.chat.id):
@@ -248,7 +262,7 @@ async def aio_command(message: types.Message):
 @router.message(Command("spam"))
 async def spam_command(message: types.Message):
     await spammer_command(message)
-    
+
 @router.message(Command("transfer"))
 async def transfer_command(message: types.Message):
     if not has_valid_access(message.chat.id):
@@ -275,15 +289,12 @@ async def handle_main_message(message: types.Message):
     user_id = message.from_user.id
     state = user_states[user_id]
 
-    # 1. SPAMMER handler (highest priority)
     if await spammer_message_handler(message):
         return
 
-    # 2. SIGNUP/SIGNIN handler (next priority)
     if await signup_message_handler(message):
         return
 
-    # 3. Custom Speed Handler
     if state.get("awaiting_custom_speed"):
         if message.text and message.text.strip().lower() == "/cancel":
             state.pop("awaiting_custom_speed", None)
@@ -293,15 +304,12 @@ async def handle_main_message(message: types.Message):
         await handle_custom_speed_message(message, state, bot, get_tokens, get_current_account)
         return
 
-    # 4. Ignore commands (handled elsewhere)
     if message.text and message.text.startswith("/"):
         return
 
-    # 5. Verify access
     if message.from_user.is_bot or not has_valid_access(user_id):
         return
 
-    # 6. Token Handler
     if message.text:
         token_data = message.text.strip().split(" ")
         token = token_data[0]
@@ -337,54 +345,59 @@ async def handle_main_message(message: types.Message):
 async def callback_handler(callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     state = user_states[user_id]
+
     if not has_valid_access(user_id):
         await callback_query.answer("You are not authorized to use this bot.")
         return
 
-    # --- SPAMMER CALLBACKS (priority) ---
     if await spammer_callback_handler(callback_query):
         return
 
-    # --- SIGNUP/SIGNIN CALLS (priority) ---
     if await signup_callback_handler(callback_query):
         return
 
-    # Blocklist first
     if await handle_blocklist_callback(callback_query):
         return
 
-    # Unsubscribe
-    if await handle_unsubscribe_callback(callback_query, state, bot, user_id, get_current_account, get_tokens, unsubscribe_everyone): return
-    # Chatroom
-    if await handle_chatroom_callback(callback_query, state, bot, user_id, get_current_account, get_tokens, send_message_to_everyone): return
-    # Lounge
-    if await handle_lounge_callback(callback_query, state, bot, user_id, get_current_account, get_tokens, send_lounge): return
-    # AIO
+    if await handle_unsubscribe_callback(callback_query, state, bot, user_id, get_current_account, get_tokens, unsubscribe_everyone):
+        return
+
+    if await handle_chatroom_callback(callback_query, state, bot, user_id, get_current_account, get_tokens, send_message_to_everyone):
+        return
+
+    if await handle_lounge_callback(callback_query, state, bot, user_id, get_current_account, get_tokens, send_lounge):
+        return
+
     if callback_query.data.startswith("aio_"):
         await aio_callback_handler(callback_query)
         return
-    # All Countries
+
     if await handle_all_countries_callback(
         callback_query, state, bot, user_id, get_current_account, get_tokens, set_current_account,
         run_all_countries, start_markup
-    ): return
-    # Requests (with speed markup support)
+    ):
+        return
+
     if await handle_requests_callback(
         callback_query, state, bot, user_id, get_current_account, get_tokens,
         set_current_account, start_markup
-    ): return
+    ):
+        return
 
-    # Tools: manage accounts, filters, blocklist, and sign up/in
     if callback_query.data == "manage_accounts":
         tokens = get_all_tokens(user_id)
         current_token = get_current_account(user_id)
         if not tokens:
-            await callback_query.message.edit_text("No accounts saved. Send a new token to add an account.", reply_markup=back_markup)
+            await callback_query.message.edit_text(
+                "No accounts saved. Send a new token to add an account.",
+                reply_markup=back_markup
+            )
             return
         await callback_query.message.edit_text(
             "Manage your accounts:",
             reply_markup=build_accounts_buttons(tokens, current_token)
         )
+
     elif callback_query.data.startswith("set_account_"):
         index = int(callback_query.data.split("_")[-1])
         tokens = get_all_tokens(user_id)
@@ -401,6 +414,7 @@ async def callback_handler(callback_query: CallbackQuery):
             )
         else:
             await callback_query.answer("Invalid account selected.")
+
     elif callback_query.data.startswith("delete_account_"):
         index = int(callback_query.data.split("_")[-1])
         tokens = get_all_tokens(user_id)
@@ -409,6 +423,7 @@ async def callback_handler(callback_query: CallbackQuery):
             await callback_query.message.edit_text("Account has been deleted.", reply_markup=back_markup)
         else:
             await callback_query.answer("Invalid account selected.")
+
     elif callback_query.data.startswith("toggle_account_"):
         index = int(callback_query.data.split("_")[-1])
         tokens = get_all_tokens(user_id)
@@ -423,6 +438,7 @@ async def callback_handler(callback_query: CallbackQuery):
             )
         else:
             await callback_query.answer("Invalid account selected.")
+
     elif callback_query.data.startswith("view_account_"):
         index = int(callback_query.data.split("_")[-1])
         tokens = get_all_tokens(user_id)
@@ -435,16 +451,23 @@ async def callback_handler(callback_query: CallbackQuery):
                 await callback_query.answer("No information card found for this account.")
         else:
             await callback_query.answer("Invalid account selected.")
+
     elif callback_query.data == "settings_filters":
         await filter_command(callback_query.message, edit=True)
+
     elif callback_query.data == "settings_blocklist":
         await blocklist_command(callback_query, edit=True)
+
     elif callback_query.data == "back_to_menu":
         try:
-            await callback_query.message.edit_text("Accounts & Tools menu. Choose an option below:", reply_markup=get_tools_markup())
+            await callback_query.message.edit_text(
+                "Accounts & Tools menu. Choose an option below:",
+                reply_markup=get_tools_markup()
+            )
         except Exception as e:
             if "message is not modified" not in str(e):
                 raise
+
     if callback_query.data.startswith("filter_"):
         await set_filter(callback_query)
 
